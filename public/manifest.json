@@ -1,0 +1,16 @@
+{
+  "name": "Luxe Bite",
+  "short_name": "LuxeBite",
+  "description": "Premium Ghanaian cuisine delivered fresh to your doorstep",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fcfaf7",
+  "theme_color": "#e07926",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64",
+      "type": "image/x-icon"
+    }
+  ]
+}
