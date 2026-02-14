@@ -13,7 +13,7 @@ const MobileNav = () => {
   const navItems = [
     { href: '/', icon: Home, label: 'Home' },
     { href: '/menu', icon: UtensilsCrossed, label: 'Menu' },
-    { href: '/cart', icon: ShoppingCart, label: 'Cart', badge: itemCount },
+    { href: '/cart', icon: ShoppingCart, label: 'Cart', badge: itemCount > 0 ? itemCount : undefined },
     ...(isAdmin ? [{ href: '/admin', icon: LayoutDashboard, label: 'Admin' }] : []),
     { href: user ? '/orders' : '/auth', icon: User, label: user ? 'Orders' : 'Login' },
   ];

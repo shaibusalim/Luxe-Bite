@@ -23,3 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.*
+.env.local
+.env.*.local
+.eslintcache
+coverage
+.vite
+Thumbs.db

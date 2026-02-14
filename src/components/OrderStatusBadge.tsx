@@ -26,7 +26,7 @@ const statusConfig = {
   out_for_delivery: {
     label: 'Out for Delivery',
     icon: Truck,
-    className: 'status-preparing',
+    className: 'status-out-for-delivery',
   },
   delivered: {
     label: 'Delivered',

@@ -49,7 +49,7 @@ const Header = () => {
           )}
         </nav>
 
-        <div className="flex items-center gap-3">
+        <div className="hidden md:flex items-center gap-3">
           <Link to="/cart" className="relative">
             <Button variant="ghost" size="icon" className="relative">
               <ShoppingCart className="h-5 w-5" />
@@ -60,15 +60,16 @@ const Header = () => {
               )}
             </Button>
           </Link>
-          
           {user ? (
-            <Button variant="ghost" size="icon" onClick={signOut}>
-              <LogOut className="h-5 w-5" />
+            <Button variant="outline" size="sm" onClick={signOut} className="flex items-center gap-2">
+              <LogOut className="h-4 w-4" />
+              <span>Sign Out</span>
             </Button>
           ) : (
             <Link to="/auth">
-              <Button variant="ghost" size="icon">
-                <User className="h-5 w-5" />
+              <Button variant="outline" size="sm" className="flex items-center gap-2">
+                <User className="h-4 w-4" />
+                <span>Sign In</span>
               </Button>
             </Link>
           )}

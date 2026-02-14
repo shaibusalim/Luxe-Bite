@@ -1,13 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '@/integrations/supabase/client';
 
 interface AuthContextType {
-  user: User | null;
-  session: Session | null;
+  user: { id: string; email?: string } | null;
+  session: null;
   isAdmin: boolean;
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
+  signInAdmin: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
 }
@@ -15,87 +14,100 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
+  const [session, setSession] = useState<null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  const checkAdminRole = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', userId)
-        .eq('role', 'admin')
-        .maybeSingle();
-      
-      if (error) throw error;
-      setIsAdmin(!!data);
-    } catch (err) {
-      console.error('Error checking admin role:', err);
-      setIsAdmin(false);
-    }
+  const checkAdminRole = async (_userId: string) => {
+    setIsAdmin(false);
   };
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          setTimeout(() => {
-            checkAdminRole(session.user.id);
-          }, 0);
-        } else {
-          setIsAdmin(false);
-        }
-        setIsLoading(false);
+    const token = localStorage.getItem('token');
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        setUser({ id: payload.id, email: payload.email });
+        setIsAdmin(Array.isArray(payload.roles) && payload.roles.includes('admin'));
+      } catch {
+        localStorage.removeItem('token');
       }
-    );
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      
-      if (session?.user) {
-        checkAdminRole(session.user.id);
-      }
-      setIsLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+    }
+    setSession(null);
+    setIsLoading(false);
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error };
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!res.ok) throw new Error('Invalid credentials');
+      const data = await res.json();
+      localStorage.setItem('token', data.token);
+      setUser({ id: data.user.id, email: data.user.email });
+      setIsAdmin(Array.isArray(data.roles) && data.roles.includes('admin'));
+      return { error: null };
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      return { error: err };
+    }
+  };
+
+  const signInAdmin = async (email: string, password: string) => {
+    try {
+      const res = await fetch('/api/auth/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Invalid credentials');
+      }
+      const data = await res.json();
+      localStorage.setItem('token', data.token);
+      setUser({ id: data.user.id, email: data.user.email });
+      setIsAdmin(true);
+      return { error: null };
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      return { error: err };
+    }
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
-    const redirectUrl = `${window.location.origin}/`;
-    
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: redirectUrl,
-        data: { full_name: fullName },
-      },
-    });
-    return { error };
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, full_name: fullName }),
+      });
+      if (!res.ok) throw new Error('Signup failed');
+      const data = await res.json();
+      localStorage.setItem('token', data.token);
+      setUser({ id: data.user.id, email: data.user.email });
+      setIsAdmin(Array.isArray(data.roles) && data.roles.includes('admin'));
+      return { error: null };
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      return { error: err };
+    }
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
     setUser(null);
     setSession(null);
     setIsAdmin(false);
+    localStorage.removeItem('token');
   };
 
   return (
     <AuthContext.Provider
-      value={{ user, session, isAdmin, isLoading, signIn, signUp, signOut }}
+      value={{ user, session, isAdmin, isLoading, signIn, signInAdmin, signUp, signOut }}
     >
       {children}
     </AuthContext.Provider>

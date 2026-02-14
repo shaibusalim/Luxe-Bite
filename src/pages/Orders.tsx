@@ -76,7 +76,7 @@ const Orders = () => {
                   {order.order_items?.length || 0} item(s)
                 </p>
                 <p className="font-bold text-primary">
-                  GHC {order.total.toFixed(2)}
+                  GHC {Number(order.total).toFixed(2)}
                 </p>
               </div>
             </div>

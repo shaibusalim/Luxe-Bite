@@ -16,6 +16,7 @@ export interface MenuItem {
   image_url: string | null;
   is_available: boolean;
   is_weekend_only: boolean;
+  is_popular?: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -50,7 +51,7 @@ export interface Order {
   subtotal: number;
   delivery_fee: number;
   total: number;
-  payment_method: 'mtn' | 'vodafone' | 'airteltigo' | 'pay_on_delivery';
+  payment_method: 'mtn' | 'vodafone' | 'airteltigo' | 'pay_on_delivery' | 'paystack';
   payment_status: 'pending' | 'paid' | 'failed';
   special_instructions: string | null;
   created_at: string;

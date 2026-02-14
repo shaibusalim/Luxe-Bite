@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useMenuCategories, useMenuItems } from '@/hooks/useMenu';
+import { useAddToCart } from '@/hooks/useAddToCart';
 import CategoryTabs from '@/components/CategoryTabs';
 import MenuItemCard from '@/components/MenuItemCard';
 import LoadingSpinner from '@/components/LoadingSpinner';
@@ -9,7 +10,8 @@ import LoadingSpinner from '@/components/LoadingSpinner';
 const Menu = () => {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  
+  const addToCart = useAddToCart();
+
   const { data: categories, isLoading: categoriesLoading } = useMenuCategories();
   const { data: menuItems, isLoading: itemsLoading } = useMenuItems();
 
@@ -83,7 +85,7 @@ const Menu = () => {
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {items.map((item) => (
-                  <MenuItemCard key={item.id} item={item} />
+                  <MenuItemCard key={item.id} item={item} onAddToCart={addToCart} />
                 ))}
               </div>
             </div>
@@ -92,7 +94,7 @@ const Menu = () => {
           // Flat list
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filteredItems.map((item) => (
-              <MenuItemCard key={item.id} item={item} />
+              <MenuItemCard key={item.id} item={item} onAddToCart={addToCart} />
             ))}
           </div>
         )}

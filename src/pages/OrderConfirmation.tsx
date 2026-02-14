@@ -30,6 +30,7 @@ const OrderConfirmation = () => {
     vodafone: 'Vodafone Cash',
     airteltigo: 'AirtelTigo Money',
     pay_on_delivery: 'Pay on Delivery',
+    paystack: 'Paystack',
   };
 
   return (
@@ -95,7 +96,7 @@ const OrderConfirmation = () => {
                   )}
                 </div>
                 <span className="font-medium">
-                  GHC {(item.unit_price * item.quantity).toFixed(2)}
+                  GHC {(Number(item.unit_price) * item.quantity).toFixed(2)}
                 </span>
               </div>
             ))}
@@ -104,15 +105,15 @@ const OrderConfirmation = () => {
           <div className="border-t border-border mt-4 pt-4 space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Subtotal</span>
-              <span>GHC {order.subtotal.toFixed(2)}</span>
+              <span>GHC {Number(order.subtotal).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Delivery Fee</span>
-              <span>GHC {order.delivery_fee.toFixed(2)}</span>
+              <span>GHC {Number(order.delivery_fee).toFixed(2)}</span>
             </div>
             <div className="flex justify-between font-bold text-lg pt-2 border-t border-border">
               <span>Total</span>
-              <span className="text-primary">GHC {order.total.toFixed(2)}</span>
+              <span className="text-primary">GHC {Number(order.total).toFixed(2)}</span>
             </div>
           </div>
         </div>

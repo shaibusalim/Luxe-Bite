@@ -1,13 +1,19 @@
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { ShoppingBag, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCart } from '@/contexts/CartContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useDeliverySettings } from '@/hooks/useDeliverySettings';
 import CartItemCard from '@/components/CartItemCard';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 const Cart = () => {
+  const { user, isLoading } = useAuth();
   const { items, getSubtotal, clearCart } = useCart();
   const { data: settings } = useDeliverySettings();
+
+  if (isLoading) return <LoadingSpinner text="Loading..." />;
+  if (!user) return <Navigate to="/auth" replace state={{ from: '/cart' }} />;
   
   const subtotal = getSubtotal();
   const deliveryFee = settings?.delivery_fee || 10;
@@ -61,17 +67,17 @@ const Cart = () => {
             <div className="space-y-3 mb-6">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span className="font-medium">GHC {subtotal.toFixed(2)}</span>
+                <span className="font-medium">GHC {Number(subtotal).toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Delivery Fee</span>
-                <span className="font-medium">GHC {deliveryFee.toFixed(2)}</span>
+                <span className="font-medium">GHC {Number(deliveryFee).toFixed(2)}</span>
               </div>
               <div className="border-t border-border pt-3">
                 <div className="flex justify-between">
                   <span className="font-semibold">Total</span>
                   <span className="font-bold text-lg text-primary">
-                    GHC {total.toFixed(2)}
+                    GHC {Number(total).toFixed(2)}
                   </span>
                 </div>
               </div>

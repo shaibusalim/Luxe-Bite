@@ -28,7 +28,7 @@ const CartItemCard = ({ item }: CartItemCardProps) => {
           </div>
           
           <p className="text-primary font-bold mb-3">
-            GHC {(item.price * item.quantity).toFixed(2)}
+            GHC {(Number(item.price) * item.quantity).toFixed(2)}
           </p>
           
           <div className="flex items-center gap-3">
@@ -52,7 +52,7 @@ const CartItemCard = ({ item }: CartItemCardProps) => {
               </Button>
             </div>
             <span className="text-sm text-muted-foreground">
-              @ GHC {item.price.toFixed(2)} each
+              @ GHC {Number(item.price).toFixed(2)} each
             </span>
           </div>
         </div>

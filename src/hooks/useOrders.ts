@@ -1,5 +1,4 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { Order, OrderItem, CartItem } from '@/lib/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEffect } from 'react';
@@ -12,10 +11,13 @@ interface CreateOrderData {
   subtotal: number;
   delivery_fee: number;
   total: number;
-  payment_method: 'mtn' | 'vodafone' | 'airteltigo' | 'pay_on_delivery';
+  payment_method: 'mtn' | 'vodafone' | 'airteltigo' | 'pay_on_delivery' | 'paystack';
+  paystack_reference?: string;
   special_instructions?: string;
   items: CartItem[];
 }
+
+// Using Vite dev proxy, no need for API base URL
 
 export const useCreateOrder = () => {
   const { user } = useAuth();
@@ -23,34 +25,19 @@ export const useCreateOrder = () => {
   return useMutation({
     mutationFn: async (orderData: CreateOrderData): Promise<Order> => {
       const { items, ...orderDetails } = orderData;
-      
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert({
+      const res = await fetch(`/api/orders`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+        },
+        body: JSON.stringify({
           ...orderDetails,
-          user_id: user?.id || null,
-          payment_status: orderDetails.payment_method === 'pay_on_delivery' ? 'pending' : 'pending',
-        })
-        .select()
-        .single();
-
-      if (orderError) throw orderError;
-
-      const orderItems: Omit<OrderItem, 'id' | 'created_at'>[] = items.map((item) => ({
-        order_id: order.id,
-        menu_item_id: item.id,
-        item_name: item.name,
-        quantity: item.quantity,
-        unit_price: item.price,
-        special_instructions: item.special_instructions || null,
-      }));
-
-      const { error: itemsError } = await supabase
-        .from('order_items')
-        .insert(orderItems);
-
-      if (itemsError) throw itemsError;
-
+          items,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to create order');
+      const order = await res.json();
       return order as Order;
     },
   });
@@ -63,17 +50,13 @@ export const useUserOrders = () => {
     queryKey: ['user-orders', user?.id],
     queryFn: async (): Promise<Order[]> => {
       if (!user) return [];
-      
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          order_items(*)
-        `)
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
+      const res = await fetch(`/api/orders?user_id=${user.id}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+        },
+      });
+      if (!res.ok) throw new Error('Failed to fetch orders');
+      const data = await res.json();
       return data as Order[];
     },
     enabled: !!user,
@@ -84,55 +67,82 @@ export const useOrderById = (orderId: string) => {
   return useQuery({
     queryKey: ['order', orderId],
     queryFn: async (): Promise<Order | null> => {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          order_items(*)
-        `)
-        .eq('id', orderId)
-        .maybeSingle();
-
-      if (error) throw error;
+      const res = await fetch(`/api/orders/${orderId}`);
+      if (!res.ok) throw new Error('Failed to fetch order');
+      const data = await res.json();
       return data as Order | null;
     },
     enabled: !!orderId,
   });
 };
 
-export const useAdminOrders = () => {
-  const queryClient = useQueryClient();
-  
-  const query = useQuery({
-    queryKey: ['admin-orders'],
-    queryFn: async (): Promise<Order[]> => {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          order_items(*)
-        `)
-        .order('created_at', { ascending: false });
+export interface AdminOrdersResponse {
+  data: Order[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
-      if (error) throw error;
-      return data as Order[];
+export const useAdminOrders = (params?: { page?: number; limit?: number; status?: string }) => {
+  const queryClient = useQueryClient();
+  const { isAdmin, isLoading: authLoading } = useAuth();
+
+  const query = useQuery({
+    queryKey: ['admin-orders', params?.page, params?.limit, params?.status],
+    queryFn: async (): Promise<AdminOrdersResponse | Order[]> => {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Not authenticated. Please log in as admin.');
+      }
+      
+      const queryParams = new URLSearchParams();
+      if (params?.page) queryParams.append('page', params.page.toString());
+      if (params?.limit) queryParams.append('limit', params.limit.toString());
+      if (params?.status) queryParams.append('status', params.status);
+      
+      const res = await fetch(`/api/orders?${queryParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        const errorText = await res.text();
+        if (res.status === 401) {
+          throw new Error('Session expired or invalid. Please log in again.');
+        }
+        if (res.status === 403) {
+          throw new Error('Access denied. Admin login required.');
+        }
+        throw new Error(`Failed to fetch orders: ${res.status}`);
+      }
+      const data = await res.json();
+      return data;
     },
+    enabled: !!isAdmin && !authLoading,
+    staleTime: 0,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
 
   useEffect(() => {
-    const channel = supabase
-      .channel('admin-orders-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        () => {
-          queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
-        }
-      )
-      .subscribe();
-
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource('/api/orders/stream');
+      es.onmessage = () => {
+        console.log('Real-time update: invalidating admin-orders');
+        queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+      };
+      es.onerror = (err) => {
+        console.error('SSE Error:', err);
+        if (es) es.close();
+      };
+    } catch (e) {
+      console.error('Failed to establish SSE connection:', e);
+    }
+    
     return () => {
-      supabase.removeChannel(channel);
+      if (es) es.close();
     };
   }, [queryClient]);
 
@@ -144,12 +154,34 @@ export const useUpdateOrderStatus = () => {
   
   return useMutation({
     mutationFn: async ({ orderId, status }: { orderId: string; status: Order['status'] }) => {
-      const { error } = await supabase
-        .from('orders')
-        .update({ status })
-        .eq('id', orderId);
+      const res = await fetch(`/api/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+        },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error('Failed to update status');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+    },
+  });
+};
 
-      if (error) throw error;
+export const useDeleteOrder = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (orderId: string) => {
+      const res = await fetch(`/api/orders/${orderId}`, {
+        method: 'DELETE',
+        headers: { 
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+        },
+      });
+      if (!res.ok) throw new Error('Failed to delete order');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
