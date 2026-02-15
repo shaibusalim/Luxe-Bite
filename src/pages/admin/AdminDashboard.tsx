@@ -20,6 +20,13 @@ const AdminDashboard = () => {
   };
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [queryClient]);
+
+  useEffect(() => {
     if (error) {
       console.error('AdminDashboard: Failed to fetch orders:', error);
     }

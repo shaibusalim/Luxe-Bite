@@ -268,8 +268,11 @@ const Index = () => {
       </section>
 
       {/* 4. WHY PEOPLE LOVE LUXE BITE */}
-      <section className="section-mobile bg-muted/50">
-        <div className="container">
+      <section className="section-mobile relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-background via-orange-50/70 to-background" />
+        <div className="absolute -right-24 -top-24 w-64 h-64 rounded-full bg-primary/10 blur-3xl" />
+        <div className="absolute -left-24 -bottom-24 w-64 h-64 rounded-full bg-amber-300/10 blur-3xl" />
+        <div className="container relative">
           <ScrollReveal className="text-center mb-10">
             <span className="text-primary text-sm font-semibold uppercase tracking-wider">
               Why Choose Us
@@ -498,6 +501,9 @@ const Index = () => {
           <div className="pt-8 border-t border-secondary-foreground/20 flex flex-col md:flex-row items-center justify-between gap-4 text-center md:text-left">
             <p className="text-secondary-foreground/70 text-sm">
               © {new Date().getFullYear()} Luxe Bite • {settings?.delivery_area || 'Tamale'}, Ghana
+            </p>
+            <p className="text-secondary-foreground/70 text-sm">
+              Built by <span className="font-semibold text-primary">Gh0sT-Tech</span>
             </p>
           </div>
         </div>
