@@ -9,10 +9,35 @@ import helmet from "helmet";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
+import multer from "multer";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const app = express();
 const port = process.env.PORT;
 const sql = neon(config.DATABASE_URL);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsDir = path.join(__dirname, "..", "uploads");
+
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname) || "";
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + ext.toLowerCase());
+  },
+});
+
+const upload = multer({ storage });
 
 const allowedOrigins = (config.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 app.use(
@@ -38,6 +63,7 @@ app.use(
   })
 );
 app.use(express.json());
+app.use("/uploads", express.static(uploadsDir));
 
 const signToken = (payload) => jwt.sign(payload, config.JWT_SECRET, { expiresIn: "24h" });
 const auth = (req, res, next) => {
@@ -283,6 +309,14 @@ app.get("/api/orders/stream", (req, res) => {
     sseClients.delete(res);
     res.end();
   });
+});
+
+app.post("/api/upload/menu-image", auth, ensureAdmin, upload.single("image"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
+  const urlPath = `/uploads/${req.file.filename}`;
+  res.json({ url: urlPath });
 });
 
 app.post("/api/auth/signup", async (req, res) => {
@@ -772,15 +806,27 @@ app.post("/api/menu-items", auth, ensureAdmin, async (req, res) => {
       is_available = true,
       is_weekend_only = false,
     } = req.body;
+
+    if (!name || !category_id || price === undefined || price === null || price === "") {
+      return res.status(400).json({ error: "Missing required fields: name, price, category_id" });
+    }
+
+    const numericPrice = Number(price);
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+      return res.status(400).json({ error: "Invalid price value" });
+    }
+
+    const id = randomUUID();
     const inserted = await sql`
       INSERT INTO public.menu_items
-      (name, description, price, category_id, image_url, is_available, is_weekend_only)
-      VALUES (${name}, ${description}, ${price}, ${category_id}, ${image_url}, ${is_available}, ${is_weekend_only})
+      (id, name, description, price, category_id, image_url, is_available, is_weekend_only)
+      VALUES (${id}, ${name}, ${description}, ${numericPrice}, ${category_id}, ${image_url}, ${is_available}, ${is_weekend_only})
       RETURNING *
     `;
     res.status(201).json(inserted[0]);
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    console.error("Error creating menu item:", e);
+    res.status(500).json({ error: e?.message || String(e) });
   }
 });
 

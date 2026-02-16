@@ -32,6 +32,7 @@ const AdminMenu = () => {
     is_available: true,
     is_weekend_only: false,
   });
+  const [imageFile, setImageFile] = useState<File | null>(null);
 
   const resetForm = () => {
     setFormData({
@@ -44,6 +45,7 @@ const AdminMenu = () => {
       is_weekend_only: false,
     });
     setEditingItem(null);
+    setImageFile(null);
   };
 
   const openAddDialog = () => {
@@ -62,6 +64,7 @@ const AdminMenu = () => {
       is_available: item.is_available,
       is_weekend_only: item.is_weekend_only,
     });
+    setImageFile(null);
     setIsItemDialogOpen(true);
   };
 
@@ -72,12 +75,34 @@ const AdminMenu = () => {
     }
 
     try {
+      let imageUrl = formData.image_url.trim() || null;
+
+      if (imageFile) {
+        const uploadFormData = new FormData();
+        uploadFormData.append('image', imageFile);
+
+        const uploadRes = await fetch(`/api/upload/menu-image`, {
+          method: 'POST',
+          headers: { 
+            'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+          },
+          body: uploadFormData,
+        });
+
+        if (!uploadRes.ok) {
+          throw new Error('Failed to upload image');
+        }
+
+        const uploadData = await uploadRes.json();
+        imageUrl = uploadData.url || imageUrl;
+      }
+
       const itemData = {
         name: formData.name,
         description: formData.description || null,
         price: parseFloat(formData.price),
         category_id: formData.category_id,
-        image_url: formData.image_url || null,
+        image_url: imageUrl,
         is_available: formData.is_available,
         is_weekend_only: formData.is_weekend_only,
       };
@@ -326,13 +351,26 @@ const AdminMenu = () => {
               </div>
             </div>
 
-            <div>
-              <Label>Image URL</Label>
-              <Input
-                value={formData.image_url}
-                onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
-                placeholder="https://..."
-              />
+            <div className="space-y-2">
+              <div>
+                <Label>Upload Image</Label>
+                <Input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setImageFile(file);
+                  }}
+                />
+              </div>
+              <div>
+                <Label>Image URL</Label>
+                <Input
+                  value={formData.image_url}
+                  onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                  placeholder="https://..."
+                />
+              </div>
             </div>
 
             <div className="flex items-center justify-between">
