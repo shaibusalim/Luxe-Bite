@@ -18,6 +18,18 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
+  build: {
+    outDir: "dist",
+    sourcemap: mode === "development",
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ["react", "react-dom", "react-router-dom"],
+          ui: ["@radix-ui/react-dialog", "@radix-ui/react-dropdown-menu"],
+        },
+      },
+    },
+  },
   plugins: [react()],
   resolve: {
     alias: {

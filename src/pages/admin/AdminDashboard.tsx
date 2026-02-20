@@ -13,6 +13,7 @@ const AdminDashboard = () => {
   const { data: orders, isLoading, error } = useAdminOrders();
   const queryClient = useQueryClient();
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const cancelAudioRef = useRef<HTMLAudioElement | null>(null);
   const previousOrderCountRef = useRef<number>(0);
 
   const handleRefresh = () => {
@@ -45,6 +46,19 @@ const AdminDashboard = () => {
       previousOrderCountRef.current = orders.length;
     }
   }, [orders]);
+
+  // Play sound when an order is cancelled (from SSE)
+  useEffect(() => {
+    const handler = () => {
+      try {
+        cancelAudioRef.current?.play();
+      } catch (e) {
+        console.log('Cancel audio play failed:', e);
+      }
+    };
+    window.addEventListener('admin-order-cancelled', handler);
+    return () => window.removeEventListener('admin-order-cancelled', handler);
+  }, []);
 
   if (isLoading) {
     return <LoadingSpinner />;
@@ -94,6 +108,7 @@ const AdminDashboard = () => {
   return (
     <div>
       <audio ref={audioRef} src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" />
+      <audio ref={cancelAudioRef} src="https://assets.mixkit.co/active_storage/sfx/2572/2572-preview.mp3" />
 
       <motion.div
         className="flex items-center justify-between mb-6"

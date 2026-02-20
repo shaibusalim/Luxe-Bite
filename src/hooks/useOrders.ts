@@ -1,7 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Order, OrderItem, CartItem } from '@/lib/types';
 import { useAuth } from '@/contexts/AuthContext';
-import { useEffect } from 'react';
 
 interface CreateOrderData {
   customer_name: string;
@@ -125,27 +124,6 @@ export const useAdminOrders = (params?: { page?: number; limit?: number; status?
     refetchOnWindowFocus: true,
   });
 
-  useEffect(() => {
-    let es: EventSource | null = null;
-    try {
-      es = new EventSource('/api/orders/stream');
-      es.onmessage = () => {
-        console.log('Real-time update: invalidating admin-orders');
-        queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
-      };
-      es.onerror = (err) => {
-        console.error('SSE Error:', err);
-        if (es) es.close();
-      };
-    } catch (e) {
-      console.error('Failed to establish SSE connection:', e);
-    }
-    
-    return () => {
-      if (es) es.close();
-    };
-  }, [queryClient]);
-
   return query;
 };
 
@@ -166,6 +144,30 @@ export const useUpdateOrderStatus = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+    },
+  });
+};
+
+export const useCancelOrder = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (orderId: string) => {
+      const res = await fetch(`/api/orders/${orderId}/cancel`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+        },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || 'Failed to cancel order');
+      }
+    },
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ['user-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['order', orderId] });
     },
   });
 };

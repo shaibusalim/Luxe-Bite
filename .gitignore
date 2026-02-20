@@ -30,3 +30,10 @@ dist-ssr
 coverage
 .vite
 Thumbs.db
+
+# Uploads (keep directory structure but ignore files)
+uploads/*
+!uploads/.gitkeep
+
+*.md
+!README.md

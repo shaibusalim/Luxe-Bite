@@ -1,17 +1,21 @@
 import { Navigate, Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, UtensilsCrossed, FolderOpen, Layers, Settings, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, UtensilsCrossed, FolderOpen, Layers, Settings, LogOut, Menu, X, Bell, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useAuth } from '@/contexts/AuthContext';
+import { AdminNotificationProvider, useAdminNotifications } from '@/contexts/AdminNotificationContext';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { format } from 'date-fns';
 
-const AdminLayout = () => {
+function AdminLayoutInner() {
   const { user, isAdmin, isLoading, signOut } = useAuth();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const notifications = useAdminNotifications();
 
   if (isLoading) {
     return <LoadingSpinner text="Loading..." />;
@@ -139,6 +143,84 @@ const AdminLayout = () => {
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="icon" className="relative">
+                  <Bell className="h-5 w-5" />
+                  {notifications && notifications.unreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
+                      {notifications.unreadCount > 99 ? '99+' : notifications.unreadCount}
+                    </span>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 p-0" align="end">
+                <div className="flex items-center justify-between border-b px-4 py-3">
+                  <h3 className="font-semibold">Notifications</h3>
+                  {notifications && notifications.notifications.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs"
+                      onClick={() => notifications.markAllAsRead()}
+                    >
+                      Mark all read
+                    </Button>
+                  )}
+                </div>
+                <div className="max-h-[320px] overflow-y-auto">
+                  {!notifications || notifications.notifications.length === 0 ? (
+                    <p className="px-4 py-6 text-center text-sm text-muted-foreground">No notifications yet</p>
+                  ) : (
+                    notifications.notifications.map((n) => (
+                      <div
+                        key={n.id}
+                        className={cn(
+                          'border-b px-4 py-3 last:border-b-0',
+                          !n.read && 'bg-muted/50'
+                        )}
+                      >
+                        {n.type === 'order_cancelled' && (
+                          <>
+                            <div className="flex items-start gap-2">
+                              <div className="rounded-full bg-destructive/10 p-1.5">
+                                <XCircle className="h-4 w-4 text-destructive" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm">Order cancelled</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {n.customer_name} cancelled order #{String(n.order_id).slice(0, 8).toUpperCase()}
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  GHC {Number(n.total).toFixed(2)} • {format(new Date(n.createdAt), 'MMM d, h:mm a')}
+                                </p>
+                                <Link to="/admin/orders" onClick={() => notifications?.markAsRead(n.id)}>
+                                  <Button variant="link" className="h-auto p-0 text-xs text-primary">
+                                    View orders
+                                  </Button>
+                                </Link>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+                {notifications && notifications.notifications.length > 0 && (
+                  <div className="border-t p-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full text-xs text-muted-foreground"
+                      onClick={() => notifications.clearAll()}
+                    >
+                      Clear all
+                    </Button>
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
             <Avatar className="h-9 w-9 rounded-full border-2 border-border">
               <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
                 {user?.email?.slice(0, 2).toUpperCase() ?? 'A'}
@@ -165,6 +247,12 @@ const AdminLayout = () => {
       </div>
     </div>
   );
-};
+}
+
+const AdminLayout = () => (
+  <AdminNotificationProvider>
+    <AdminLayoutInner />
+  </AdminNotificationProvider>
+);
 
 export default AdminLayout;

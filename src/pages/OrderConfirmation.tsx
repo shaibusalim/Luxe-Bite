@@ -1,14 +1,32 @@
 import { useParams, Link } from 'react-router-dom';
-import { CheckCircle, ArrowLeft, Phone, MapPin, Clock } from 'lucide-react';
+import { CheckCircle, ArrowLeft, Phone, MapPin, Clock, XCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useOrderById } from '@/hooks/useOrders';
+import { useOrderById, useCancelOrder } from '@/hooks/useOrders';
+import { useAuth } from '@/contexts/AuthContext';
 import OrderStatusBadge from '@/components/OrderStatusBadge';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
 
 const OrderConfirmation = () => {
   const { orderId } = useParams<{ orderId: string }>();
-  const { data: order, isLoading } = useOrderById(orderId || '');
+  const { user } = useAuth();
+  const { data: order, isLoading, refetch } = useOrderById(orderId || '');
+  const cancelOrder = useCancelOrder();
+
+  const canCancel = order?.status === 'pending' && user && order?.user_id === user.id;
+
+  const handleCancelOrder = async () => {
+    if (!orderId) return;
+    if (!confirm('Are you sure you want to cancel this order?')) return;
+    try {
+      await cancelOrder.mutateAsync(orderId);
+      toast.success('Order cancelled');
+      refetch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to cancel order');
+    }
+  };
 
   if (isLoading) {
     return <LoadingSpinner text="Loading order..." />;
@@ -126,9 +144,27 @@ const OrderConfirmation = () => {
           </p>
         </div>
 
-        <div className="mt-8 text-center">
+        <div className="mt-8 flex flex-wrap justify-center gap-3">
+          {canCancel && (
+            <Button
+              variant="outline"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              onClick={handleCancelOrder}
+              disabled={cancelOrder.isPending}
+            >
+              {cancelOrder.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <XCircle className="h-4 w-4 mr-2" />
+              )}
+              Cancel Order
+            </Button>
+          )}
           <Link to="/menu">
             <Button variant="outline">Order More</Button>
+          </Link>
+          <Link to="/orders">
+            <Button variant="outline">My Orders</Button>
           </Link>
         </div>
       </div>

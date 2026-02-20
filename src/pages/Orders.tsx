@@ -1,15 +1,29 @@
 import { Link } from 'react-router-dom';
-import { Package, ArrowRight } from 'lucide-react';
+import { Package, ArrowRight, XCircle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useUserOrders } from '@/hooks/useOrders';
+import { useUserOrders, useCancelOrder } from '@/hooks/useOrders';
 import { useAuth } from '@/contexts/AuthContext';
 import OrderStatusBadge from '@/components/OrderStatusBadge';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
 
 const Orders = () => {
   const { user, isLoading: authLoading } = useAuth();
   const { data: orders, isLoading: ordersLoading } = useUserOrders();
+  const cancelOrder = useCancelOrder();
+
+  const handleCancelOrder = async (e: React.MouseEvent, orderId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to cancel this order?')) return;
+    try {
+      await cancelOrder.mutateAsync(orderId);
+      toast.success('Order cancelled');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to cancel order');
+    }
+  };
 
   if (authLoading || ordersLoading) {
     return <LoadingSpinner text="Loading orders..." />;
@@ -57,7 +71,7 @@ const Orders = () => {
 
       <div className="space-y-4">
         {orders.map((order) => (
-          <Link key={order.id} to={`/order/${order.id}`}>
+          <Link key={order.id} to={`/order/${order.id}`} className="block">
             <div className="card-elevated p-4 hover:shadow-lg transition-shadow cursor-pointer">
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -68,7 +82,28 @@ const Orders = () => {
                     {format(new Date(order.created_at), 'MMM d, yyyy h:mm a')}
                   </p>
                 </div>
-                <OrderStatusBadge status={order.status} size="sm" />
+                <div className="flex items-center gap-2">
+                  <OrderStatusBadge status={order.status} size="sm" />
+                  {order.status === 'pending' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                      onClick={(e) => handleCancelOrder(e, order.id)}
+                      disabled={cancelOrder.isPending}
+                    >
+                      {cancelOrder.isPending && cancelOrder.variables === order.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 mr-1" />
+                          Cancel
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center justify-between">

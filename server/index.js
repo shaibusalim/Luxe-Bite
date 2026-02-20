@@ -15,7 +15,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const app = express();
-const port = process.env.PORT;
+const port = process.env.PORT || 3002;
 const sql = neon(config.DATABASE_URL);
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,18 +26,45 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// File upload security configuration
+const MAX_FILE_SIZE_MB = config.MAX_FILE_SIZE_MB || 5;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+const ALLOWED_FILE_TYPES = (config.ALLOWED_FILE_TYPES || "image/jpeg,image/png,image/webp,image/gif")
+  .split(",")
+  .map((t) => t.trim());
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
     cb(null, uploadsDir);
   },
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || "";
+    // Sanitize filename
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const sanitizedExt = ext.match(/^\.(jpg|jpeg|png|gif|webp)$/) ? ext : ".jpg";
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + ext.toLowerCase());
+    cb(null, uniqueSuffix + sanitizedExt);
   },
 });
 
-const upload = multer({ storage });
+const fileFilter = (req, file, cb) => {
+  if (!file.mimetype || !ALLOWED_FILE_TYPES.includes(file.mimetype)) {
+    return cb(
+      new Error(
+        `Invalid file type. Allowed types: ${ALLOWED_FILE_TYPES.join(", ")}`
+      ),
+      false
+    );
+  }
+  cb(null, true);
+};
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: MAX_FILE_SIZE_BYTES,
+  },
+  fileFilter,
+});
 
 const allowedOrigins = (config.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim()).filter(Boolean);
 app.use(
@@ -52,20 +79,58 @@ app.use(
     credentials: true,
   })
 );
-app.use(helmet());
-app.use(morgan("combined"));
+// Enhanced security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+// Logging (only in production for security)
+if (config.NODE_ENV === "production") {
+  app.use(morgan("combined"));
+} else {
+  app.use(morgan("dev"));
+}
+
+// Global rate limiting
 app.use(
   rateLimit({
     windowMs: config.RATE_LIMIT_WINDOW_MS || 60_000,
     max: config.RATE_LIMIT_MAX || 100,
     standardHeaders: true,
     legacyHeaders: false,
+    message: "Too many requests from this IP, please try again later.",
   })
 );
-app.use(express.json());
-app.use("/uploads", express.static(uploadsDir));
 
-const signToken = (payload) => jwt.sign(payload, config.JWT_SECRET, { expiresIn: "24h" });
+// Body parser with size limit
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Serve uploads with security headers
+app.use("/uploads", express.static(uploadsDir, {
+  setHeaders: (res, path) => {
+    // Only allow images
+    if (path.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+      res.setHeader("Content-Type", "image/jpeg");
+    }
+  },
+}));
+
+const signToken = (payload) =>
+  jwt.sign(payload, config.JWT_SECRET, {
+    expiresIn: config.JWT_EXPIRES_IN || "24h",
+  });
 const auth = (req, res, next) => {
   const header = req.headers.authorization || "";
   console.log("Auth header present:", !!header);
@@ -175,9 +240,39 @@ const ensureTables = async () => {
       updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
     )
   `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS public.admin_notifications (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      order_id TEXT,
+      customer_name TEXT,
+      customer_phone TEXT,
+      total DOUBLE PRECISION,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+      read BOOLEAN NOT NULL DEFAULT false
+    )
+  `;
 };
 
 await ensureTables();
+
+const createAdminNotification = async (payload) => {
+  const id = randomUUID();
+  const type = payload.type || "order_cancelled";
+  const orderId = payload.order_id || null;
+  const customerName = payload.customer_name || null;
+  const customerPhone = payload.customer_phone || null;
+  const total = typeof payload.total === "number" ? payload.total : null;
+  try {
+    await sql`
+      INSERT INTO public.admin_notifications
+      (id, type, order_id, customer_name, customer_phone, total)
+      VALUES (${id}, ${type}, ${orderId}, ${customerName}, ${customerPhone}, ${total})
+    `;
+  } catch (e) {
+    console.error("Failed to persist admin notification:", e);
+  }
+};
 
 const sseClients = new Set();
 const broadcast = (event) => {
@@ -187,20 +282,34 @@ const broadcast = (event) => {
   }
 };
 
-// Per-route limiter for auth endpoints
+// Stricter rate limiting for auth endpoints
 app.use(
   "/api/auth",
   rateLimit({
-    windowMs: 60_000,
-    max: 10,
+    windowMs: config.RATE_LIMIT_AUTH_WINDOW_MS || 60_000,
+    max: config.RATE_LIMIT_AUTH_MAX || 5,
     standardHeaders: true,
     legacyHeaders: false,
+    message: "Too many authentication attempts, please try again later.",
+    skipSuccessfulRequests: true,
   })
 );
+
+// Rate limiting for order creation
+const orderCreateLimiter = rateLimit({
+  windowMs: 60_000, // 1 minute
+  max: 10, // 10 orders per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many order requests, please try again later.",
+});
 
 // Anti-bruteforce tracking (in-memory)
 const loginAttempts = new Map(); // key: email|ip -> { count, blockedUntil }
 const getKey = (email, ip) => `${email}|${ip || "unknown"}`;
+const MAX_LOGIN_ATTEMPTS = config.MAX_LOGIN_ATTEMPTS || 5;
+const LOGIN_BLOCK_DURATION_MS = config.LOGIN_BLOCK_DURATION_MS || 15 * 60_000; // 15 minutes default
+
 const isBlocked = (email, ip) => {
   const key = getKey(email, ip);
   const rec = loginAttempts.get(key);
@@ -210,8 +319,8 @@ const recordFailure = (email, ip) => {
   const key = getKey(email, ip);
   const rec = loginAttempts.get(key) || { count: 0, blockedUntil: 0 };
   rec.count += 1;
-  if (rec.count >= 5) {
-    rec.blockedUntil = Date.now() + 15 * 60_000; // 15 minutes
+  if (rec.count >= MAX_LOGIN_ATTEMPTS) {
+    rec.blockedUntil = Date.now() + LOGIN_BLOCK_DURATION_MS;
     rec.count = 0;
   }
   loginAttempts.set(key, rec);
@@ -220,6 +329,31 @@ const clearFailures = (email, ip) => {
   loginAttempts.delete(getKey(email, ip));
 };
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+
+// Input sanitization helpers
+const sanitizeString = (str, maxLength = 1000) => {
+  if (typeof str !== "string") return "";
+  return str
+    .trim()
+    .slice(0, maxLength)
+    .replace(/[<>]/g, ""); // Remove potential HTML tags
+};
+
+const sanitizeNumber = (num, min = 0, max = Number.MAX_SAFE_INTEGER) => {
+  const parsed = Number(num);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(min, Math.min(max, parsed));
+};
+
+// Error response helper (don't leak sensitive info)
+const sendError = (res, status, message, details = null) => {
+  const response = { error: message };
+  // Only include details in development
+  if (config.NODE_ENV === "development" && details) {
+    response.details = details;
+  }
+  return res.status(status).json(response);
+};
 
 const paystackInitSchema = z.object({
   email: z.string().email(),
@@ -313,8 +447,14 @@ app.get("/api/orders/stream", (req, res) => {
 
 app.post("/api/upload/menu-image", auth, ensureAdmin, upload.single("image"), (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
+    return res.status(400).json({ error: "No file uploaded or invalid file type" });
   }
+  
+  // Additional validation
+  if (req.file.size > MAX_FILE_SIZE_BYTES) {
+    return res.status(400).json({ error: `File size exceeds ${MAX_FILE_SIZE_MB}MB limit` });
+  }
+  
   const urlPath = `/uploads/${req.file.filename}`;
   res.json({ url: urlPath });
 });
@@ -322,47 +462,75 @@ app.post("/api/upload/menu-image", auth, ensureAdmin, upload.single("image"), (r
 app.post("/api/auth/signup", async (req, res) => {
   try {
     const parsed = signupSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Unable to process request" });
+    if (!parsed.success) {
+      return sendError(res, 400, "Invalid request data");
+    }
+    
     const email = normalizeEmail(parsed.data.email);
+    const fullName = sanitizeString(parsed.data.full_name || "", 100);
+    
+    // Validate email format more strictly
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email) || email.length > 255) {
+      return sendError(res, 400, "Invalid email format");
+    }
+    
     const existing = await sql`SELECT id FROM public.users WHERE email = ${email} LIMIT 1`;
-    if (existing.length) return res.status(400).json({ error: "Unable to process request" });
+    if (existing.length) {
+      return sendError(res, 400, "Email already registered");
+    }
+    
     const id = randomUUID();
-    const hash = await bcrypt.hash(parsed.data.password, 12);
-    await sql`INSERT INTO public.users (id, email, password_hash, full_name) VALUES (${id}, ${email}, ${hash}, ${parsed.data.full_name || null})`;
+    const bcryptRounds = config.BCRYPT_ROUNDS || 12;
+    const hash = await bcrypt.hash(parsed.data.password, bcryptRounds);
+    
+    await sql`INSERT INTO public.users (id, email, password_hash, full_name) VALUES (${id}, ${email}, ${hash}, ${fullName || null})`;
     await sql`INSERT INTO public.user_roles (user_id, role) VALUES (${id}, ${"customer"})`;
     const roles = ["customer"];
     const token = signToken({ id, email, roles });
     res.status(201).json({ token, user: { id, email }, roles });
   } catch (e) {
-    res.status(500).json({ error: e?.message || String(e), stack: e?.stack || null });
+    console.error("Signup error:", e);
+    sendError(res, 500, "Unable to create account", e?.message);
   }
 });
 
 app.post("/api/auth/login", async (req, res) => {
   try {
-    const ip = req.ip;
+    const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
     const parsed = loginSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Invalid credentials" });
+    if (!parsed.success) {
+      return sendError(res, 400, "Invalid credentials");
+    }
+    
     const email = normalizeEmail(parsed.data.email);
-    if (isBlocked(email, ip)) return res.status(429).json({ error: "Invalid credentials" });
+    
+    // Check if blocked
+    if (isBlocked(email, ip)) {
+      return sendError(res, 429, "Too many failed attempts. Please try again later.");
+    }
+    
     const rows = await sql`SELECT id, password_hash FROM public.users WHERE email = ${email} LIMIT 1`;
     const user = rows[0];
     if (!user) {
       recordFailure(email, ip);
-      return res.status(401).json({ error: "Invalid credentials" });
+      return sendError(res, 401, "Invalid credentials");
     }
+    
     const ok = await bcrypt.compare(parsed.data.password, user.password_hash);
     if (!ok) {
       recordFailure(email, ip);
-      return res.status(401).json({ error: "Invalid credentials" });
+      return sendError(res, 401, "Invalid credentials");
     }
+    
     const roleRows = await sql`SELECT role FROM public.user_roles WHERE user_id = ${user.id}`;
     const roles = roleRows.map((r) => r.role);
     const token = signToken({ id: user.id, email, roles });
-    res.json({ token, user: { id: user.id, email }, roles });
     clearFailures(email, ip);
+    res.json({ token, user: { id: user.id, email }, roles });
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    console.error("Login error:", e);
+    sendError(res, 500, "Login failed", e?.message);
   }
 });
 
@@ -622,7 +790,7 @@ app.get("/api/orders", auth, (req, res, next) => {
     }
   } catch (e) {
     console.error("Final catch in GET /api/orders:", e);
-    res.status(500).json({ error: "Internal server error", details: e.message });
+    sendError(res, 500, "Failed to fetch orders", e?.message);
   }
 });
 
@@ -639,11 +807,12 @@ app.get("/api/orders/:id", async (req, res) => {
     `;
     res.json({ ...order, order_items: items });
   } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
+    console.error("Get order error:", e);
+    sendError(res, 500, "Failed to fetch order", e?.message);
   }
 });
 
-app.post("/api/orders", auth, async (req, res) => {
+app.post("/api/orders", auth, orderCreateLimiter, async (req, res) => {
   try {
     try { await sql`
       CREATE TABLE IF NOT EXISTS public.orders (
@@ -663,7 +832,10 @@ app.post("/api/orders", auth, async (req, res) => {
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
       )
-    `; } catch (e) { return res.status(500).json({ error: "create_orders_failed", message: e?.message || String(e) }); }
+    `; } catch (e) {
+      console.error("Table creation error:", e);
+      return sendError(res, 500, "Database error");
+    }
     try { await sql`
       CREATE TABLE IF NOT EXISTS public.order_items (
         id TEXT PRIMARY KEY,
@@ -675,38 +847,73 @@ app.post("/api/orders", auth, async (req, res) => {
         special_instructions TEXT,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
       )
-    `; } catch (e) { return res.status(500).json({ error: "create_order_items_failed", message: e?.message || String(e) }); }
-    const {
-      customer_name,
-      customer_phone,
-      delivery_address,
-      order_type,
-      subtotal,
-      delivery_fee,
-      total,
-      payment_method,
-      paystack_reference,
-      special_instructions,
-      items,
-      user_id = req.user?.id ?? null,
-    } = req.body;
+    `; } catch (e) {
+      console.error("Table creation error:", e);
+      return sendError(res, 500, "Database error");
+    }
+    
+    // Sanitize and validate inputs
+    const customer_name = sanitizeString(req.body.customer_name || "", 100);
+    const customer_phone = sanitizeString(req.body.customer_phone || "", 20);
+    const delivery_address = sanitizeString(req.body.delivery_address || "", 500);
+    const order_type = req.body.order_type === "delivery" || req.body.order_type === "pickup" 
+      ? req.body.order_type 
+      : null;
+    const subtotal = sanitizeNumber(req.body.subtotal, 0, 100000);
+    const delivery_fee = sanitizeNumber(req.body.delivery_fee, 0, 10000);
+    const total = sanitizeNumber(req.body.total, 0, 100000);
+    const payment_method = req.body.payment_method;
+    const paystack_reference = typeof req.body.paystack_reference === "string" 
+      ? sanitizeString(req.body.paystack_reference, 100) 
+      : null;
+    const special_instructions = sanitizeString(req.body.special_instructions || "", 500);
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    const user_id = req.user?.id ?? null;
+
+    // Validation
+    if (!customer_name || customer_name.length < 2) {
+      return sendError(res, 400, "Valid customer name is required");
+    }
+    if (!customer_phone || customer_phone.length < 10) {
+      return sendError(res, 400, "Valid phone number is required");
+    }
+    if (!order_type) {
+      return sendError(res, 400, "Invalid order type");
+    }
+    if (order_type === "delivery" && (!delivery_address || delivery_address.length < 5)) {
+      return sendError(res, 400, "Delivery address is required");
+    }
+    if (!subtotal || subtotal <= 0) {
+      return sendError(res, 400, "Invalid subtotal");
+    }
+    if (!total || total <= 0) {
+      return sendError(res, 400, "Invalid total");
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return sendError(res, 400, "Order must contain at least one item");
+    }
+    if (items.length > 50) {
+      return sendError(res, 400, "Order cannot contain more than 50 items");
+    }
 
     const allowedPaymentMethods = ["mtn", "vodafone", "airteltigo", "pay_on_delivery", "paystack"];
     if (!allowedPaymentMethods.includes(payment_method)) {
-      return res.status(400).json({ error: "Invalid payment method" });
+      return sendError(res, 400, "Invalid payment method");
     }
 
     let payment_status = "pending";
     if (payment_method === "paystack") {
-      if (typeof paystack_reference !== "string" || paystack_reference.trim().length === 0) {
-        return res.status(400).json({ error: "Payment reference required" });
+      if (!paystack_reference || paystack_reference.length === 0) {
+        return sendError(res, 400, "Payment reference required");
       }
-      const verified = await verifyPaystackReference(paystack_reference.trim());
-      if (!verified.ok) return res.status(402).json({ error: "Payment not completed" });
+      const verified = await verifyPaystackReference(paystack_reference);
+      if (!verified.ok) {
+        return sendError(res, 402, "Payment not completed");
+      }
 
-      const expectedMinor = Math.round(Number(total) * 100);
+      const expectedMinor = Math.round(total * 100);
       if (Number.isFinite(expectedMinor) && typeof verified.amount === "number" && verified.amount !== expectedMinor) {
-        return res.status(400).json({ error: "Payment amount mismatch" });
+        return sendError(res, 400, "Payment amount mismatch");
       }
       payment_status = "paid";
     }
@@ -727,10 +934,20 @@ app.post("/api/orders", auth, async (req, res) => {
     if (Array.isArray(items) && items.length > 0) {
       try {
         for (const it of items) {
+          const itemName = sanitizeString(it.name || "", 200);
+          const itemQuantity = sanitizeNumber(it.quantity, 1, 100);
+          const itemPrice = sanitizeNumber(it.price, 0, 10000);
+          const itemSpecialInstructions = sanitizeString(it.special_instructions || "", 500);
+          
+          if (!itemName || itemQuantity <= 0 || !itemPrice || itemPrice <= 0) {
+            console.error("Invalid order item:", it);
+            continue; // Skip invalid items
+          }
+          
           await sql`
             INSERT INTO public.order_items
             (id, order_id, menu_item_id, item_name, quantity, unit_price, special_instructions, created_at)
-            VALUES (${randomUUID()}, ${order.id}, ${it.id}, ${it.name}, ${it.quantity}, ${it.price}, ${it.special_instructions ?? null}, now())
+            VALUES (${randomUUID()}, ${order.id}, ${it.id || null}, ${itemName}, ${itemQuantity}, ${itemPrice}, ${itemSpecialInstructions || null}, now())
           `;
         }
       } catch (e) {
@@ -742,7 +959,8 @@ app.post("/api/orders", auth, async (req, res) => {
     res.status(201).json(order);
     broadcast({ type: "order_created", order_id: order.id });
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    console.error("Order creation error:", e);
+    sendError(res, 500, "Failed to create order", e?.message);
   }
 });
 
@@ -775,13 +993,74 @@ app.patch("/api/orders/:id/status", auth, ensureAdmin, async (req, res) => {
     if (!allowed.includes(status)) {
       return res.status(400).json({ error: "Invalid status" });
     }
+    let order = null;
+    if (status === "cancelled") {
+      const rows = await sql`
+        SELECT id, customer_name, customer_phone, total FROM public.orders WHERE id = ${id} LIMIT 1
+      `;
+      order = rows[0] || null;
+      if (!order) {
+        return sendError(res, 404, "Order not found");
+      }
+    }
     await sql`
       UPDATE public.orders SET status = ${status} WHERE id = ${id}
     `;
     res.json({ ok: true });
     broadcast({ type: "order_status_updated", order_id: id, status });
+    if (status === "cancelled" && order) {
+      const payload = {
+        type: "order_cancelled",
+        order_id: id,
+        customer_name: order.customer_name,
+        customer_phone: order.customer_phone,
+        total: order.total,
+      };
+      broadcast(payload);
+      await createAdminNotification(payload);
+    }
   } catch (e) {
     res.status(500).json({ error: String(e) });
+  }
+});
+
+// User cancel own order (only when status is pending)
+app.patch("/api/orders/:id/cancel", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id;
+
+    const rows = await sql`
+      SELECT id, user_id, status, customer_name, customer_phone, total FROM public.orders WHERE id = ${id} LIMIT 1
+    `;
+    const order = rows[0];
+    if (!order) {
+      return sendError(res, 404, "Order not found");
+    }
+    if (order.user_id !== userId) {
+      return sendError(res, 403, "You can only cancel your own orders");
+    }
+    if (order.status !== "pending") {
+      return sendError(res, 400, "Only pending orders can be cancelled");
+    }
+
+    await sql`
+      UPDATE public.orders SET status = 'cancelled' WHERE id = ${id}
+    `;
+    res.json({ ok: true });
+    broadcast({ type: "order_status_updated", order_id: id, status: "cancelled" });
+    const payload = {
+      type: "order_cancelled",
+      order_id: id,
+      customer_name: order.customer_name,
+      customer_phone: order.customer_phone,
+      total: order.total,
+    };
+    broadcast(payload);
+    await createAdminNotification(payload);
+  } catch (e) {
+    console.error("Cancel order error:", e);
+    sendError(res, 500, "Failed to cancel order", e?.message);
   }
 });
 
@@ -789,6 +1068,54 @@ app.delete("/api/menu-items/:id", auth, ensureAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     await sql`DELETE FROM public.menu_items WHERE id = ${id}`;
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get("/api/admin/notifications", auth, ensureAdmin, async (req, res) => {
+  try {
+    const rows = await sql`
+      SELECT id, type, order_id, customer_name, customer_phone, total, created_at, read
+      FROM public.admin_notifications
+      ORDER BY created_at DESC
+      LIMIT 50
+    `;
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch("/api/admin/notifications/:id/read", auth, ensureAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await sql`
+      UPDATE public.admin_notifications SET read = true WHERE id = ${id}
+    `;
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.patch("/api/admin/notifications/read-all", auth, ensureAdmin, async (_req, res) => {
+  try {
+    await sql`
+      UPDATE public.admin_notifications SET read = true WHERE read = false
+    `;
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.delete("/api/admin/notifications", auth, ensureAdmin, async (_req, res) => {
+  try {
+    await sql`
+      DELETE FROM public.admin_notifications
+    `;
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: String(e) });
